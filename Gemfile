@@ -1,0 +1,13 @@
+source 'https://rubygems.org'
+
+gem 'sinatra'
+gem 'sinatra-contrib'
+gem 'rackup'
+gem 'puma'
+gem 'sidekiq'
+gem 'redis'
+gem 'faraday'
+gem 'pry'
+gem 'connection_pool'
+gem 'dotenv'
+gem 'rake'
