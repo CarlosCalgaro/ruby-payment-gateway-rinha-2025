@@ -1,80 +1,43 @@
-require 'bundler'
 require 'dotenv/load'
-
-Bundler.require
+require 'sequel'
 
 # Load environment variables
 Dotenv.load
 
-# Configure Sidekiq
-Sidekiq.configure_server do |config|
-  config.redis = { url: ENV['REDIS_URL'] }
-end
+namespace :db do
+  task :create do
+    # Connect to postgres system database to create the payment_gateway database
+    system_db_url = ENV.fetch('CONNECTION_URL').gsub('/payment_gateway', '/postgres')
+    system_db = Sequel.connect(system_db_url)
+    
+    begin
+      system_db.execute "DROP DATABASE IF EXISTS payment_gateway"
+      system_db.execute "CREATE DATABASE payment_gateway"
+      puts "Database 'payment_gateway' created successfully!"
+    rescue => e
+      puts "Error creating database: #{e.message}"
+    ensure
+      system_db.disconnect
+    end
+  end
 
-Sidekiq.configure_client do |config|
-  config.redis = { url: ENV['REDIS_URL'] }
-end
+  task :migrate do
+    require_relative 'db/db'
+    Sequel.extension :migration
+    Sequel::Migrator.run(DATABASE, 'db/migrations', use_transactions: true)
+    puts "Migrations completed successfully!"
+  end
 
-# Load application files
-require './connections/redis'
-require './lib/default_connector'
-require './jobs/process_payment_job'
+  task :setup => [:create, :migrate] do
+    puts "Database setup completed!"
+  end
+end
 
 namespace :sidekiq do
   desc "Start Sidekiq worker"
   task :start do
     require 'sidekiq/cli'
-    cli = Sidekiq::CLI.instance
-    cli.parse(['sidekiq', '-C', 'config/sidekiq.yml'])
-    cli.run
-  end
-
-  desc "Stop Sidekiq worker"
-  task :stop do
-    system("pkill -f sidekiq")
-  end
-
-  desc "Restart Sidekiq worker"
-  task :restart => [:stop, :start]
-
-  desc "Show Sidekiq stats"
-  task :stats do
-    require 'sidekiq/api'
-    stats = Sidekiq::Stats.new
-    puts "Processed: #{stats.processed}"
-    puts "Failed: #{stats.failed}"
-    puts "Busy: #{stats.workers_size}"
-    puts "Enqueued: #{stats.enqueued}"
-    puts "Scheduled: #{stats.scheduled_size}"
-    puts "Retries: #{stats.retry_size}"
-    puts "Dead: #{stats.dead_size}"
-  end
-
-  desc "Clear all Sidekiq queues"
-  task :clear do
-    require 'sidekiq/api'
-    Sidekiq::Queue.new('payments').clear
-    Sidekiq::Queue.new('default').clear
-    puts "All queues cleared"
-  end
-end
-
-namespace :app do
-  desc "Start the web application on port 9999"
-  task :start do
-    system("rackup config.ru -p 9999")
-  end
-
-  desc "Start Redis via Docker"
-  task :redis do
-    system("docker-compose up -d redis")
-  end
-
-  desc "Stop all services"
-  task :stop do
-    system("docker-compose down")
-    system("pkill -f rackup")
-    system("pkill -f sidekiq")
+    exec("bundle exec sidekiq -r ./sidekiq_boot.rb -C config/sidekiq.yml")
   end
 end
 
